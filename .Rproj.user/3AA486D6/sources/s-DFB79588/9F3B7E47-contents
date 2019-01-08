@@ -1,0 +1,242 @@
+
+# mainData <- read.csv("Analysis Variables (1).csv", header = T, sep = ",")
+# summary(mainData)
+# mainData2 <- mainData[,c(-1,-4,-5,-6,-9,-15,-16,-17,-26,-27)] # taking out the things we don't need/too many na's
+# mainData2$SPANISH.SPEAKER <- NULL
+# mainData2$HOURS.IN.DELIVERY <- NULL
+# mainData2$LOCATION.OF.INJURY.OCCURANCE <- NULL
+# mainData2$SEX
+# mainData$INITIAL.DIAGNOSIS <- NULL
+# cleanedData <- na.omit(mainData2)
+# write.csv(cleanedData, file="cleanedData.csv", sep = ",", row.names = F)
+# 
+# train_index <- sample(1:nrow(cleanedData), 1500)
+# train_small <- cleanedData[train_index,]
+# write.csv(train_small, file = "train_small.csv", row.names = F)
+# summary(cleanedData)
+# # testing data 20%
+# total <- nrow(cleanedData)
+# 0.2*total
+# numTest = 1341542
+# testIndices <- sample(1:total, numTest,replace = F)
+# trainIndices <- (-testIndices)
+# length(trainIndices)
+# # use lasso to throw out the element we don't need
+# # new training and testing set 
+# # model selection:
+# #lasso:
+#  y1 <- cleanedData$LENGTH.OF.STAY
+#  y2 <- cleanedData$SERVICE.TYPE #NORMAL SHORT STAY
+#  x <- cleanedData[,c(-1,-9)]
+# lasso.mod = glmnet(as.matrix(x[1:1000,]), y1[1:1000], alpha = 1)
+# predictors<- names(cleanedData)
+# predictors <- predictors[c(-2, -10)]
+# cleanedData$SERVICE.TYPE <- contrasts(factor(cleanedData$SERVICE.TYPE,levels=c("NORMAL","SHORT STAY")))
+
+# for (i in 1:length(cleanedData$SERVICE.TYPE)) {
+#   if (cleanedData$SERVICE.TYPE[i] == "NORMAL") {
+#     cleanedData$SERVICE.TYPE[i] <- 0
+#   } else {
+#     cleanedData$SERVICE.TYPE[i] <- 1
+#   }
+
+# train$AGE[which(train$AGE.COD == "HOURS")] <- NA
+# train$AGE[which(train$AGE.COD == "DAYS")] <- NA
+# train$AGE[which(train$AGE.COD == "MONTHS")] <- NA
+# as.character(cleanedData$SERVICE.TYPE)
+# is.numeric(cleanedData$SERVICE.TYPE)
+# 
+# cleanedData$SERVICE.TYPE[cleanedData$SERVICE.TYPE=="NORMAL"]=0
+# cleanedData$SERVICE.TYPE[cleanedData$SERVICE.TYPE=="SHORT STAY"]=1
+# predictors<- names(train)
+# f <- as.formula(paste('LENGTH.OF.STAY ~', paste(predictors, collapse='+')))
+# f
+
+# n = length(y)
+# summary(y)
+# sum(y <= 7 & y > 3)
+# sum(y <= 14 & y > 7)
+# sum(y <= 21 & y > 14)
+# sum(y <= 28 & y > 21)
+# sum(y <= 35 & y > 28)
+# sum(y <= 42 & y > 35)
+# sum(y <= 47 & y > 42)
+# sum(y <= 56 & y > 47) # 2 month
+# sum(y > 56)
+# # make 10 categories:
+
+# setting up
+setwd("/Users/honganni/Documents/School work/Econ 484/484 Group Project Data Files")
+require(randomForest)
+require(xgboost)
+require(Matrix)
+require(data.table)
+require(tree)
+require(splines)
+install.packages("mboost")
+require(mboost)
+if (!require('vcd')) install.packages('vcd')
+?mboost
+# load data
+dat <- read.csv("cleanedData.csv", sep = ",")
+dat_small <- read.csv("train_small.csv", sep = ",")
+dat_second <- readRDS("FINAL VARS.rds")
+dat_second$INDIGENOUS.LANGUAGE.SPOKEN <- NULL
+dat_second$SERVHC <- NULL
+dat_second$SERVHP <- NULL
+dat_second$INDIGENOUS.LANGUAGE.SPOKEN.1<- NULL
+dat_second$INDIGENOUS.PERSON<- NULL
+dat_second$SPANISH.SPEAKER[is.na(dat_second$SPANISH.SPEAKER)] <- NULL
+dat_second$TRANSFERED.FROM <- NULL
+dat_second$INTENTIONALITY.OF.INJURY <- NULL
+dat_second$LOCATION.OF.INJURY.OCCURANCE<- NULL
+dat_second$CAUSE.OF.INJURY <-NULL
+
+var2 <- readRDS("FINAL VARS.rds")
+
+dat_second <- var2[,-c(3:8,16:20,29:31)]
+
+dat_second <- na.omit(dat_second)
+names(dat_second)
+dat_curr <- dat_second
+
+dat_curr.orig <- dat_curr
+
+dat_curr$realage <- with(dat_curr, interaction(AGE.CODE,AGE))
+
+names(dat_curr)
+
+dat_curr.orig <- dat_curr
+
+dat_curr <- dat_curr[,-c(3,4,12,17)]
+
+View(train)
+
+names(dat_curr)
+
+# the function for boostedReg:
+boostedClass <- function(train, test){
+  train$LENGTH.OF.STAY  <- NULL
+  test$LENGTH.OF.STAY  <- NULL
+  test = test
+  train = train
+  #format the data:
+  this_test <- data.table(test, keep.rownames = F) 
+  this_test <- sparse.model.matrix(SERVICE.TYPE~.-1, data = this_test)
+  
+  df <- data.table(train, keep.rownames = F)
+  sparse_matrix <- sparse.model.matrix(SERVICE.TYPE~.-1, data = df)
+  output_vector = df[,SERVICE.TYPE] == "SHORT STAY"
+  
+  # fit model
+  bst <- xgboost(data = sparse_matrix, label = output_vector, max.depth = 4,
+                 eta = 1, nthread = 2, nround = 12, objective = "binary:logistic")
+  
+  # predict
+  pred <- predict(bst, this_test)
+  err <- abs(sum(pred<0.5) - sum(test$SERVICE.TYPE == "NORMAL"))
+  print("error rate")
+  (err / nrow(test))
+  
+  importance <- xgb.importance(feature_names = sparse_matrix@Dimnames[[2]], model = bst)
+  head(importance)
+  
+  # confusion matrix:
+  bst.pred <- rep("NORMAL", nrow(test))
+  bst.pred[pred>0.5]="SHORT STAY"
+  return(table(bst.pred, test$SERVICE.TYPE))
+}
+
+boostedReg <- function(train, test){
+  train$SERVICE.TYPE <- NULL
+  test$SERVICE.TYPE <-NULL
+  # train[,c(2,4,6,7,9)] <- lapply(train[,c(2,4,6,7,9)], as.numeric) 
+  # train$STATE <- as.factor(train$STATE)
+  # 
+  # #test[,c(2,4,6,7,9)] <- lapply(test[,c(2,4,6,7,9)], as.numeric) 
+  # test$STATE <- as.factor(test$STATE)
+  
+  dtrain <- xgb.DMatrix(data.matrix(train[,-2]), label=train$LENGTH.OF.STAY)
+  dtest <- xgb.DMatrix(data.matrix(test[,-2]), label=test$LENGTH.OF.STAY)
+  bst <- xgboost(data = dtrain, 
+                 booster = "gbtree", 
+                 objective = "reg:linear", 
+                 max.depth = 10, 
+                 eta = 0.1, 
+                 nthread = 2, 
+                 nround = 6, 
+                 min_child_weight = 1, 
+                 subsample = 0.5, 
+                 colsample_bytree = 1, 
+                 num_parallel_tree = 3)
+  pred <- predict(bst, dtest)
+  plot(pred, test$LENGTH.OF.STAY)
+  abline(0,1)
+  return(mean((pred - test$LENGTH.OF.STAY)^2))
+}
+
+classificationTree <- function(train, test){
+  test$LENGTH.OF.STAY <- NULL
+  train$LENGTH.OF.STAY <-NULL
+  
+  tree <- tree(SERVICE.TYPE~., data = train)
+  plot(tree)
+  text(tree)
+  
+  pred <- predict(tree, test, type = "class")
+  
+  # confusion matrix:
+  
+  return(table(pred, test$SERVICE.TYPE))
+}
+
+bag.rf <- function(test, train){
+  train$SERVICE.TYPE <- NULL
+  test$SERVICE.TYPE <-NULL
+  train2 <- train
+  test2 <- test
+  
+  bag.ranForest <- randomForest(LENGTH.OF.STAY~., data=train2, mtry=4, importance=T)
+  
+  bag.ranForest
+  importance(bag.ranForest)
+  
+  rf.pred = predict(bag.ranForest, newdata=test2)
+  plot(rf.pred, test2$LENGTH.OF.STAY)
+  abline(0,1)
+  mean(rf.pred - (test2$LENGTH.OF.STAY)^2)
+}
+
+#train_index <- sample(1:nrow(dat_curr),1200) # make a random sample of 80% of the data
+train_index <- sample(1:nrow(dat_curr),nrow(dat_curr)*.8) # make a random sample of 80% of the data
+
+train <- dat_curr[train_index,] # training set: 1341542
+test <- dat_curr[-c(train_index),] # testing set:335386
+#----------------------------
+# y1_train <- train$LENGTH.OF.STAY
+# y2_train <- train$SERVICE.TYPE 
+# train$LENGTH.OF.STAY <- NULL
+# train$SERVICE.TYPE <- NULL
+
+# doing the boosting, returns a confusion matrix:
+boostedClass(train, test)
+#false positive:  0.0017
+# false negative: 0.004
+# total: 0.005765901
+boostedReg(train,test)
+
+classificationTree(train, test)
+
+bag.rf(train,test)
+
+
+
+
+#splines
+features <- train[,-2]
+paste(names(features), collapse=' , ')
+fit <- lm(LENGTH.OF.STAY~ns(AGE, df=10), data = train)
+summary(fit)
+pred2 <- predict(fit, newdata = test,se=T)
+sqrt(mean((pred2$fit - as.numeric(test$LENGTH.OF.STAY))^2))
+sd(test$LENGTH.OF.STAY)
